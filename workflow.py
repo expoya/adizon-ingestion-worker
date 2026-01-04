@@ -152,8 +152,16 @@ async def load_node(state: IngestionState) -> dict:
         }
 
     except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"\n{'='*60}")
+        print(f"❌ ERROR in load_node:")
+        print(f"   {str(e)}")
+        print(f"\n{error_trace}")
+        print(f"{'='*60}\n")
         return {
             "error": f"Failed to load document: {str(e)}",
+            "traceback": error_trace,
             "status": "error",
         }
 
@@ -340,6 +348,16 @@ async def finalize_node(state: IngestionState) -> dict:
         if state.get("error"):
             new_status = "ERROR"
             error_msg = state["error"]
+            # --- CRITICAL: Fehler explizit auf Konsole ausgeben ---
+            print(f"\n{'='*60}")
+            print(f"❌ CRITICAL ERROR in workflow:")
+            print(f"   Error: {error_msg}")
+            if "traceback" in state:
+                print(f"   Traceback: {state['traceback']}")
+            print(f"   Document: {state.get('filename', 'unknown')}")
+            print(f"   Document ID: {state.get('document_id', 'unknown')}")
+            print(f"{'='*60}\n")
+            # -------------------------------------------------------
         else:
             new_status = "INDEXED"
             error_msg = None
