@@ -43,6 +43,7 @@ class VectorStoreService:
         connection_string = (
             f"postgresql+psycopg://{settings.postgres_user}:{settings.postgres_password}"
             f"@{settings.postgres_host}:{settings.postgres_port}/{settings.postgres_db}"
+            f"?connect_timeout=60&options=-c%20statement_timeout%3D300000"
         )
 
         self.vector_store = PGVector(
