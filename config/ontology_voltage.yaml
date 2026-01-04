@@ -1,0 +1,49 @@
+# Ontology Configuration for Voltage Solutions
+# This file defines the domain-specific knowledge graph schema for multi-tenant support.
+
+domain_name: "Voltage Solutions"
+description: "B2B Photovoltaics provider handling sales, projects, and maintenance."
+
+node_types:
+  - name: "ORGANIZATION"
+    description: "Companies, Suppliers, Clients involved in business."
+
+  - name: "PERSON"
+    description: "Individuals, employees, or contact persons."
+
+  - name: "DEAL"
+    description: "Sales opportunities, offers, or potential contracts."
+
+  - name: "PROJECT"
+    description: "Physical installation projects and construction sites."
+
+  - name: "PRODUCT"
+    description: "PV hardware like modules, inverters, batteries."
+
+  - name: "LOCATION"
+    description: "Physical addresses or roof locations."
+
+relationship_types:
+  - name: "WORKS_FOR"
+    description: "Employment or affiliation relationship."
+
+  - name: "HAS_DEAL"
+    description: "Company owns a sales opportunity."
+
+  - name: "INVOLVES_PRODUCT"
+    description: "Deal or Project includes specific hardware."
+
+  - name: "LOCATED_AT"
+    description: "Entity is located at a physical address."
+
+  - name: "CONTACT_FOR"
+    description: "Person is the contact for an organization or project."
+
+  - name: "PART_OF_PROJECT"
+    description: "Deal or Product is associated with a project."
+
+  - name: "SUPPLIES"
+    description: "Organization supplies products or services."
+
+  - name: "MANAGES"
+    description: "Person manages a project, deal, or organization."

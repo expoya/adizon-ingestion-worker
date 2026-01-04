@@ -1,0 +1,63 @@
+# =============================================================================
+# Caddy Reverse Proxy Configuration for Adizon Trooper Worker
+# =============================================================================
+#
+# Add this snippet to your existing Caddyfile.
+# Assumes you have an @auth matcher defined for Bearer token authentication.
+#
+# Example @auth matcher (add to your Caddyfile if not present):
+#
+#   @auth {
+#       header Authorization Bearer*
+#       # Or use header_regexp for more complex matching
+#   }
+#
+# =============================================================================
+
+# Route to the Trooper Worker
+# Uses the same @auth rule as other protected services
+handle_path /worker/* {
+    # Require authentication
+    @auth {
+        header Authorization Bearer*
+    }
+
+    # Option 1: Forward to authenticated requests only
+    reverse_proxy @auth adizon-worker:8000
+
+    # Option 2: If you want to return 401 for unauthenticated requests
+    # respond @auth "Unauthorized" 401
+}
+
+# Alternative: If using a global auth matcher defined elsewhere
+# handle_path /worker/* {
+#     reverse_proxy @auth adizon-worker:8000
+# }
+
+# =============================================================================
+# Full Caddyfile Example
+# =============================================================================
+#
+# your-domain.com {
+#     # Define auth matcher (checks for valid Bearer token)
+#     @auth {
+#         header Authorization "Bearer {env.API_TOKEN}"
+#     }
+#
+#     # Main backend API
+#     handle /api/* {
+#         reverse_proxy adizon-backend:8000
+#     }
+#
+#     # Trooper Worker (requires auth)
+#     handle_path /worker/* {
+#         reverse_proxy @auth adizon-worker:8000
+#     }
+#
+#     # Frontend
+#     handle {
+#         reverse_proxy adizon-frontend:3000
+#     }
+# }
+#
+# =============================================================================
