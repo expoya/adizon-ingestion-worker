@@ -28,6 +28,7 @@ class IngestRequest(BaseModel):
     document_id: str = Field(..., description="UUID of the document to process")
     filename: str = Field(..., description="Original filename of the document")
     storage_path: str = Field(..., description="Path to the document in MinIO/S3")
+    callback_url: str = Field(..., description="Webhook URL for status updates")
 
 
 class IngestResponse(BaseModel):
@@ -38,7 +39,7 @@ class IngestResponse(BaseModel):
     message: str = Field(..., description="Status message")
 
 
-async def process_document(document_id: str, storage_path: str, filename: str):
+async def process_document(document_id: str, storage_path: str, filename: str, callback_url: str):
     """
     Background task to process a document.
 
@@ -49,6 +50,7 @@ async def process_document(document_id: str, storage_path: str, filename: str):
             document_id=document_id,
             storage_path=storage_path,
             filename=filename,
+            callback_url=callback_url,
         )
     except Exception as e:
         print(f"Error processing document {filename}: {e}")
@@ -90,6 +92,7 @@ async def ingest_document(request: IngestRequest, background_tasks: BackgroundTa
     print(f"📥 Received ingestion task: {request.filename}")
     print(f"   - Document ID: {request.document_id}")
     print(f"   - Storage path: {request.storage_path}")
+    print(f"   - Callback URL: {request.callback_url}")
     print(f"{'='*60}\n")
 
     # Add the processing task to background tasks
@@ -98,6 +101,7 @@ async def ingest_document(request: IngestRequest, background_tasks: BackgroundTa
         document_id=request.document_id,
         storage_path=request.storage_path,
         filename=request.filename,
+        callback_url=request.callback_url,
     )
 
     return IngestResponse(

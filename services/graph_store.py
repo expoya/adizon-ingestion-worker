@@ -5,6 +5,7 @@ Stores extracted entities and relationships in Neo4j.
 """
 
 import asyncio
+import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -46,6 +47,21 @@ class GraphStoreService:
             _executor, partial(func, *args, **kwargs)
         )
 
+    def _sanitize_props(self, props: dict) -> dict:
+        """
+        Sanitize properties for Neo4j compatibility.
+        
+        Converts nested dicts and lists to JSON strings to prevent
+        Neo4j crashes with complex metadata structures.
+        """
+        clean = {}
+        for k, v in props.items():
+            if isinstance(v, (dict, list)):
+                clean[k] = json.dumps(v, ensure_ascii=False)
+            else:
+                clean[k] = v
+        return clean
+
     async def add_graph_documents(
         self,
         entities: List[dict],
@@ -69,6 +85,9 @@ class GraphStoreService:
             if source_file:
                 props["source_file"] = source_file
 
+            # Sanitize props to prevent Neo4j crashes
+            props = self._sanitize_props(props)
+
             await self._run_sync(
                 self.driver.execute_query,
                 f"""
@@ -90,6 +109,9 @@ class GraphStoreService:
             rel_props["source_document_id"] = document_id
             if source_file:
                 rel_props["source_file"] = source_file
+
+            # Sanitize props to prevent Neo4j crashes
+            rel_props = self._sanitize_props(rel_props)
 
             await self._run_sync(
                 self.driver.execute_query,

@@ -9,13 +9,14 @@ This workflow handles:
 5. Callback to backend to update document status
 """
 
+import json
 import os
 import re
 import tempfile
 from typing import List, TypedDict
 
 import httpx
-from langchain_community.document_loaders import Docx2txtLoader, PyPDFLoader, TextLoader
+from langchain_community.document_loaders import Docx2txtLoader, PyPDFLoader, TextLoader, UnstructuredFileLoader
 from langchain_core.documents import Document
 from langchain_openai import ChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -36,6 +37,7 @@ class IngestionState(TypedDict):
     document_id: str
     storage_path: str
     filename: str
+    callback_url: str
     text_chunks: List[Document]
     entities: List[dict]
     relationships: List[dict]
@@ -94,7 +96,8 @@ async def load_node(state: IngestionState) -> dict:
                     tmp.write(content)
                     tmp_path = tmp.name
 
-                loader = PyPDFLoader(tmp_path)
+                print(f"   📄 Processing PDF with Unstructured: {state['filename']}")
+                loader = UnstructuredFileLoader(tmp_path, mode="elements", strategy="fast")
                 documents = loader.load()
 
             elif filename_lower.endswith(".docx"):
@@ -341,20 +344,24 @@ async def finalize_node(state: IngestionState) -> dict:
             new_status = "INDEXED"
             error_msg = None
 
-        # Call backend to update document status
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{settings.backend_url}/api/v1/documents/{state['document_id']}/status",
-                json={
-                    "status": new_status,
-                    "error_message": error_msg,
-                },
-                timeout=30.0,
-            )
-            if response.status_code != 200:
-                print(f"   ⚠️ Failed to update backend status: {response.status_code}")
-
-        print(f"   ✓ Document status updated: {new_status}")
+        # Call backend to update document status using dynamic callback URL
+        callback_url = state.get("callback_url")
+        if callback_url:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    callback_url,
+                    json={
+                        "status": new_status,
+                        "error_message": error_msg,
+                    },
+                    timeout=30.0,
+                )
+                if response.status_code != 200:
+                    print(f"   ⚠️ Failed to update backend status: {response.status_code}")
+                else:
+                    print(f"   ✓ Document status updated: {new_status}")
+        else:
+            print(f"   ⚠️ No callback URL provided, skipping status update")
 
         return {
             "status": new_status.lower(),
@@ -420,6 +427,7 @@ async def run_ingestion_workflow(
     document_id: str,
     storage_path: str,
     filename: str,
+    callback_url: str,
 ) -> dict:
     """
     Run the ingestion workflow for a document.
@@ -428,6 +436,7 @@ async def run_ingestion_workflow(
         document_id: UUID of the document
         storage_path: Path to the document in MinIO
         filename: Original filename
+        callback_url: Webhook URL for status updates
 
     Returns:
         Final workflow state
@@ -436,12 +445,14 @@ async def run_ingestion_workflow(
     print(f"🚀 Starting ingestion workflow for: {filename}")
     print(f"   Document ID: {document_id}")
     print(f"   Storage path: {storage_path}")
+    print(f"   Callback URL: {callback_url}")
     print(f"{'='*60}\n")
 
     initial_state: IngestionState = {
         "document_id": document_id,
         "storage_path": storage_path,
         "filename": filename,
+        "callback_url": callback_url,
         "text_chunks": [],
         "entities": [],
         "relationships": [],
