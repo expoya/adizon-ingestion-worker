@@ -1,11 +1,11 @@
 # =============================================================================
-# Adizon Trooper Worker - Docker Compose
+# Adizon Ingestion Worker - Docker Compose
 # Compute-intensive microservice for document processing & graph extraction
 # =============================================================================
 #
-# Prerequisites:
-# - External network 'adizon_net' must exist
-# - PostgreSQL, Neo4j, MinIO must be accessible on this network
+# Network Mode: Host
+# - Uses host network for direct access to local services (Ollama, etc.)
+# - No external network dependencies required
 #
 # Usage:
 #   docker-compose up -d --build
@@ -19,10 +19,7 @@ services:
       dockerfile: Dockerfile
     container_name: adizon-worker
     restart: unless-stopped
-
-    # Internal port 8000 (Caddy will proxy to this)
-    expose:
-      - "8000"
+    network_mode: "host"
 
     environment:
       # -----------------------------------------------------------------------
@@ -64,12 +61,9 @@ services:
       - ONTOLOGY_PATH=${ONTOLOGY_PATH:-config/ontology_voltage.yaml}
 
       # -----------------------------------------------------------------------
-      # Backend Callback URL
+      # Backend Callback URL (deprecated in v1.1.0 - use callback_url in request)
       # -----------------------------------------------------------------------
-      - BACKEND_URL=${BACKEND_URL:-http://adizon-backend:8000}
-
-    networks:
-      - my-ai-stack_default
+      - BACKEND_URL=${BACKEND_URL:-http://localhost:8000}
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -83,8 +77,3 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-
-networks:
-  default:
-    name: my-ai-stack_default
-    external: true
