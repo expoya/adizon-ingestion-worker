@@ -16,7 +16,8 @@ import tempfile
 from typing import List, TypedDict
 
 import httpx
-from langchain_community.document_loaders import Docx2txtLoader, PyPDFLoader, TextLoader, UnstructuredFileLoader
+from langchain_community.document_loaders import Docx2txtLoader, TextLoader
+from langchain_unstructured import UnstructuredLoader
 from langchain_core.documents import Document
 from langchain_openai import ChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -97,7 +98,13 @@ async def load_node(state: IngestionState) -> dict:
                     tmp_path = tmp.name
 
                 print(f"   📄 Processing PDF with Unstructured: {state['filename']}")
-                loader = UnstructuredFileLoader(tmp_path, mode="elements", strategy="fast")
+                # languages=["deu"] sorgt für korrekte OCR von Umlauten
+                loader = UnstructuredLoader(
+                    tmp_path,
+                    mode="elements",
+                    strategy="fast",
+                    languages=["deu"],
+                )
                 documents = loader.load()
 
             elif filename_lower.endswith(".docx"):
