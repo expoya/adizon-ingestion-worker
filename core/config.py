@@ -1,16 +1,70 @@
 """
 Trooper Worker configuration using Pydantic Settings.
-Loads environment variables from .env file.
+
+Supports two modes:
+1. Legacy mode: Load from environment variables (.env file)
+2. Multi-tenant mode: Connection configs passed per request
 """
 
 from functools import lru_cache
+from typing import Optional
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Zentrale Konstante für Vector Collection - MUSS überall gleich sein!
 VECTOR_COLLECTION_NAME = "adizon_knowledge_base"
 
+
+# =============================================================================
+# Request-Scoped Connection Configs (for multi-tenant support)
+# =============================================================================
+
+class MinioConfig(BaseModel):
+    """MinIO/S3 connection configuration."""
+    endpoint: str = Field(..., description="MinIO endpoint (host:port)")
+    access_key: str = Field(..., description="Access key")
+    secret_key: str = Field(..., description="Secret key")
+    bucket_name: str = Field(..., description="Bucket name")
+    secure: bool = Field(default=False, description="Use HTTPS")
+
+
+class PostgresConfig(BaseModel):
+    """PostgreSQL connection configuration."""
+    host: str = Field(..., description="Database host")
+    port: int = Field(default=5432, description="Database port")
+    database: str = Field(..., description="Database name")
+    user: str = Field(..., description="Database user")
+    password: str = Field(..., description="Database password")
+
+
+class Neo4jConfig(BaseModel):
+    """Neo4j connection configuration."""
+    uri: str = Field(..., description="Neo4j URI (bolt://host:port)")
+    user: str = Field(..., description="Neo4j user")
+    password: str = Field(..., description="Neo4j password")
+
+
+class EmbeddingConfig(BaseModel):
+    """Embedding API configuration."""
+    api_url: str = Field(..., description="OpenAI-compatible API URL")
+    api_key: str = Field(..., description="API key")
+    model: str = Field(default="jina/jina-embeddings-v2-base-de", description="Embedding model name")
+    llm_model: str = Field(default="adizon-ministral", description="LLM model for graph extraction")
+
+
+class ConnectionConfig(BaseModel):
+    """Complete connection configuration for a request."""
+    minio: MinioConfig
+    postgres: PostgresConfig
+    neo4j: Neo4jConfig
+    embedding: EmbeddingConfig
+    ontology_content: Optional[str] = Field(default=None, description="Ontology YAML content (base64 encoded)")
+
+
+# =============================================================================
+# Legacy Settings (for backwards compatibility / local development)
+# =============================================================================
 
 class Settings(BaseSettings):
     """Trooper Worker settings loaded from environment variables."""
@@ -80,6 +134,36 @@ class Settings(BaseSettings):
         default="http://localhost:8000",
         alias="BACKEND_URL",
     )
+
+    def to_connection_config(self) -> ConnectionConfig:
+        """Convert legacy settings to ConnectionConfig for backwards compatibility."""
+        return ConnectionConfig(
+            minio=MinioConfig(
+                endpoint=self.minio_endpoint,
+                access_key=self.minio_access_key,
+                secret_key=self.minio_secret_key,
+                bucket_name=self.minio_bucket_name,
+                secure=self.minio_secure,
+            ),
+            postgres=PostgresConfig(
+                host=self.postgres_host,
+                port=self.postgres_port,
+                database=self.postgres_db,
+                user=self.postgres_user,
+                password=self.postgres_password,
+            ),
+            neo4j=Neo4jConfig(
+                uri=self.neo4j_uri,
+                user=self.neo4j_user,
+                password=self.neo4j_password,
+            ),
+            embedding=EmbeddingConfig(
+                api_url=self.embedding_api_url,
+                api_key=self.embedding_api_key,
+                model=self.embedding_model,
+                llm_model=self.llm_model_name,
+            ),
+        )
 
 
 @lru_cache

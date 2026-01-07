@@ -3,20 +3,21 @@ MinIO Storage Service for document management.
 
 Handles file uploads, downloads, and management in MinIO object storage.
 Uses boto3 with run_in_executor for async compatibility.
+
+Supports both:
+- Config-based initialization (multi-tenant)
+- Legacy singleton mode (backwards compatibility)
 """
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
-from io import BytesIO
 
 import boto3
 from botocore.client import Config
 from botocore.exceptions import ClientError
 
-from core.config import get_settings
-
-settings = get_settings()
+from core.config import MinioConfig, get_settings
 
 # Thread pool for running blocking boto3 operations
 _executor = ThreadPoolExecutor(max_workers=4)
@@ -27,17 +28,23 @@ class MinioService:
     Service for interacting with MinIO S3-compatible storage.
     """
 
-    def __init__(self):
-        """Initialize MinIO client."""
+    def __init__(self, config: MinioConfig):
+        """
+        Initialize MinIO client with explicit configuration.
+
+        Args:
+            config: MinIO connection configuration
+        """
+        self.config = config
         self.client = boto3.client(
             "s3",
-            endpoint_url=f"{'https' if settings.minio_secure else 'http'}://{settings.minio_endpoint}",
-            aws_access_key_id=settings.minio_access_key,
-            aws_secret_access_key=settings.minio_secret_key,
+            endpoint_url=f"{'https' if config.secure else 'http'}://{config.endpoint}",
+            aws_access_key_id=config.access_key,
+            aws_secret_access_key=config.secret_key,
             config=Config(signature_version="s3v4"),
             region_name="us-east-1",
         )
-        self.bucket = settings.minio_bucket_name
+        self.bucket = config.bucket_name
 
     async def _run_sync(self, func, *args, **kwargs):
         """Run a synchronous function in the thread pool."""
@@ -68,13 +75,32 @@ class MinioService:
             return False
 
 
-# Singleton instance
+def create_minio_service(config: MinioConfig) -> MinioService:
+    """Create a new MinIO service instance with the given config."""
+    return MinioService(config)
+
+
+# =============================================================================
+# Legacy singleton support (for backwards compatibility)
+# =============================================================================
 _minio_service: MinioService | None = None
 
 
 def get_minio_service() -> MinioService:
-    """Get or create MinIO service singleton."""
+    """
+    Get or create MinIO service singleton using legacy .env settings.
+
+    DEPRECATED: Use create_minio_service(config) for multi-tenant support.
+    """
     global _minio_service
     if _minio_service is None:
-        _minio_service = MinioService()
+        settings = get_settings()
+        legacy_config = MinioConfig(
+            endpoint=settings.minio_endpoint,
+            access_key=settings.minio_access_key,
+            secret_key=settings.minio_secret_key,
+            bucket_name=settings.minio_bucket_name,
+            secure=settings.minio_secure,
+        )
+        _minio_service = MinioService(legacy_config)
     return _minio_service

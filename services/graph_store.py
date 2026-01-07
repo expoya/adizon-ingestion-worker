@@ -2,6 +2,10 @@
 Graph Store Service for Neo4j knowledge graph.
 
 Stores extracted entities and relationships in Neo4j.
+
+Supports both:
+- Config-based initialization (multi-tenant)
+- Legacy singleton mode (backwards compatibility)
 """
 
 import asyncio
@@ -14,9 +18,8 @@ from typing import List
 
 from neo4j import GraphDatabase
 
-from core.config import get_settings
+from core.config import Neo4jConfig, get_settings
 
-settings = get_settings()
 logger = logging.getLogger(__name__)
 
 # Thread pool for running blocking operations
@@ -28,11 +31,17 @@ class GraphStoreService:
     Service for storing entities and relationships in Neo4j.
     """
 
-    def __init__(self):
-        """Initialize Neo4j driver."""
+    def __init__(self, config: Neo4jConfig):
+        """
+        Initialize Neo4j driver with explicit configuration.
+
+        Args:
+            config: Neo4j connection configuration
+        """
+        self.config = config
         self.driver = GraphDatabase.driver(
-            settings.neo4j_uri,
-            auth=(settings.neo4j_user, settings.neo4j_password),
+            config.uri,
+            auth=(config.user, config.password),
         )
         self.driver.verify_connectivity()
 
@@ -135,13 +144,30 @@ class GraphStoreService:
         }
 
 
-# Singleton instance
+def create_graph_store_service(config: Neo4jConfig) -> GraphStoreService:
+    """Create a new graph store service instance with the given config."""
+    return GraphStoreService(config)
+
+
+# =============================================================================
+# Legacy singleton support (for backwards compatibility)
+# =============================================================================
 _graph_store_service: GraphStoreService | None = None
 
 
 def get_graph_store_service() -> GraphStoreService:
-    """Get or create graph store service singleton."""
+    """
+    Get or create graph store service singleton using legacy .env settings.
+
+    DEPRECATED: Use create_graph_store_service(config) for multi-tenant support.
+    """
     global _graph_store_service
     if _graph_store_service is None:
-        _graph_store_service = GraphStoreService()
+        settings = get_settings()
+        legacy_config = Neo4jConfig(
+            uri=settings.neo4j_uri,
+            user=settings.neo4j_user,
+            password=settings.neo4j_password,
+        )
+        _graph_store_service = GraphStoreService(legacy_config)
     return _graph_store_service

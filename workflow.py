@@ -2,48 +2,65 @@
 LangGraph Ingestion Workflow for document processing.
 
 This workflow handles:
-1. Loading documents from MinIO (PDF, DOCX, TXT)
+1. Loading documents from MinIO (PDF, DOCX, TXT, PPTX, XLSX, etc.)
 2. Splitting into chunks
 3. Storing embeddings in PGVector
 4. Extracting entities for Neo4j via LLM
 5. Callback to backend to update document status
+
+Supports multi-tenant mode with per-request connection configurations.
 """
 
-import json
+import base64
 import os
 import re
 import tempfile
-from typing import List, TypedDict
+from typing import Any, List, Optional, TypedDict
 
 import httpx
-from langchain_community.document_loaders import Docx2txtLoader, TextLoader
-from langchain_unstructured import UnstructuredLoader
+import yaml
 from langchain_core.documents import Document
 from langchain_openai import ChatOpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_unstructured import UnstructuredLoader
 from langgraph.graph import END, StateGraph
 
-from core.config import get_settings
-from services.graph_store import get_graph_store_service
-from services.schema_factory import get_schema_factory
-from services.storage import get_minio_service
-from services.vector_store import get_vector_store_service
-
-settings = get_settings()
+from core.config import (
+    ConnectionConfig,
+    EmbeddingConfig,
+    MinioConfig,
+    Neo4jConfig,
+    PostgresConfig,
+    get_settings,
+)
+from services.graph_store import GraphStoreService, create_graph_store_service
+from services.schema_factory import SchemaFactory
+from services.storage import MinioService, create_minio_service
+from services.vector_store import VectorStoreService, create_vector_store_service
 
 
 class IngestionState(TypedDict):
     """State for the ingestion workflow."""
 
+    # Document info
     document_id: str
     storage_path: str
     filename: str
     callback_url: str
+
+    # Connection configs (for multi-tenant support)
+    minio_config: MinioConfig
+    postgres_config: PostgresConfig
+    neo4j_config: Neo4jConfig
+    embedding_config: EmbeddingConfig
+    ontology_content: Optional[str]  # Base64 encoded YAML
+
+    # Processing state
     text_chunks: List[Document]
     entities: List[dict]
     relationships: List[dict]
     vector_ids: List[str]
-    error: str | None
+    error: Optional[str]
     status: str
 
 
@@ -71,63 +88,102 @@ def sanitize_documents(documents: List[Document]) -> List[Document]:
     return documents
 
 
-def get_llm() -> ChatOpenAI:
-    """Get the configured LLM for graph extraction."""
+def create_llm(embedding_config: EmbeddingConfig) -> ChatOpenAI:
+    """Create LLM instance with the given configuration."""
     return ChatOpenAI(
-        openai_api_base=settings.embedding_api_url,
-        openai_api_key=settings.embedding_api_key,
-        model_name=settings.llm_model_name,
+        openai_api_base=embedding_config.api_url,
+        openai_api_key=embedding_config.api_key,
+        model_name=embedding_config.llm_model,
         temperature=0,
     )
 
 
-async def load_node(state: IngestionState) -> dict:
-    """Load document from MinIO and extract text."""
+def create_schema_factory_from_content(ontology_content: str) -> SchemaFactory:
+    """
+    Create a SchemaFactory from base64-encoded YAML content.
+
+    This allows ontologies to be passed per-request instead of from file.
+    """
+    # Decode base64 content
+    yaml_content = base64.b64decode(ontology_content).decode("utf-8")
+    raw_config = yaml.safe_load(yaml_content)
+
+    # Create a temporary file for the SchemaFactory
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False, encoding="utf-8"
+    ) as tmp:
+        yaml.dump(raw_config, tmp)
+        tmp_path = tmp.name
+
     try:
-        minio = get_minio_service()
+        factory = SchemaFactory(tmp_path)
+        # Force loading to validate the config
+        factory.load_config()
+        return factory
+    finally:
+        # Clean up temp file after factory has loaded
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+
+async def load_node(state: IngestionState) -> dict:
+    """Load document from MinIO and extract text using UnstructuredLoader."""
+    try:
+        # Create MinIO service with request-specific config
+        minio = create_minio_service(state["minio_config"])
         content = await minio.download_file(state["storage_path"])
 
         filename_lower = state["filename"].lower()
         documents: List[Document] = []
-        tmp_path: str | None = None
+        tmp_path: Optional[str] = None
+
+        # File extensions that UnstructuredLoader handles well
+        UNSTRUCTURED_EXTENSIONS = {
+            # Documents
+            ".pdf", ".docx", ".doc", ".pptx", ".ppt", ".xlsx", ".xls",
+            ".odt", ".odp", ".ods", ".rtf", ".epub",
+            # Web/Markup
+            ".html", ".htm", ".xml",
+            # Email
+            ".eml", ".msg",
+            # Images (OCR)
+            ".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".heic",
+            # Data
+            ".csv", ".tsv",
+            # Text (handled by Unstructured for consistency)
+            ".txt", ".md", ".rst", ".org",
+        }
+
+        # Get file extension
+        file_ext = os.path.splitext(filename_lower)[1]
 
         try:
-            if filename_lower.endswith(".pdf"):
-                with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            if file_ext in UNSTRUCTURED_EXTENSIONS:
+                # Use UnstructuredLoader for all supported formats
+                with tempfile.NamedTemporaryFile(suffix=file_ext, delete=False) as tmp:
                     tmp.write(content)
                     tmp_path = tmp.name
 
-                print(f"   📄 Processing PDF with Unstructured: {state['filename']}")
-                # languages=["deu"] sorgt für korrekte OCR von Umlauten
-                loader = UnstructuredLoader(
-                    tmp_path,
-                    mode="elements",
-                    strategy="fast",
-                    languages=["deu"],
-                )
+                print(f"   📄 Processing {file_ext.upper()} with Unstructured: {state['filename']}")
+
+                # Configure loader based on file type
+                loader_kwargs: dict[str, Any] = {
+                    "mode": "elements",
+                    "languages": ["deu", "eng"],  # Support German and English
+                }
+
+                # Use appropriate strategy based on file type
+                if file_ext == ".pdf":
+                    loader_kwargs["strategy"] = "fast"
+                elif file_ext in {".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".heic"}:
+                    loader_kwargs["strategy"] = "ocr_only"
+
+                loader = UnstructuredLoader(tmp_path, **loader_kwargs)
                 documents = loader.load()
-
-            elif filename_lower.endswith(".docx"):
-                with tempfile.NamedTemporaryFile(suffix=".docx", delete=False) as tmp:
-                    tmp.write(content)
-                    tmp_path = tmp.name
-
-                loader = Docx2txtLoader(tmp_path)
-                documents = loader.load()
-
-            elif filename_lower.endswith(".txt") or filename_lower.endswith(".md"):
-                with tempfile.NamedTemporaryFile(suffix=".txt", delete=False, mode='wb') as tmp:
-                    tmp.write(content)
-                    tmp_path = tmp.name
-
-                loader = TextLoader(tmp_path, encoding="utf-8")
-                try:
-                    documents = loader.load()
-                except UnicodeDecodeError:
-                    loader = TextLoader(tmp_path, encoding="latin-1")
-                    documents = loader.load()
 
             else:
+                # Fallback for unknown extensions: try as plain text
+                print(f"   📄 Processing as plain text: {state['filename']}")
                 try:
                     text = content.decode("utf-8")
                 except UnicodeDecodeError:
@@ -213,7 +269,11 @@ async def vector_node(state: IngestionState) -> dict:
         return {}
 
     try:
-        vector_store = get_vector_store_service()
+        # Create vector store with request-specific configs
+        vector_store = create_vector_store_service(
+            state["postgres_config"],
+            state["embedding_config"],
+        )
         ids = await vector_store.add_documents(
             chunks=state["text_chunks"],
             document_id=state["document_id"],
@@ -244,7 +304,15 @@ async def graph_node(state: IngestionState) -> dict:
     relationships: List[dict] = []
 
     try:
-        schema_factory = get_schema_factory()
+        # Get schema factory - either from passed content or from file
+        ontology_content = state.get("ontology_content")
+        if ontology_content:
+            schema_factory = create_schema_factory_from_content(ontology_content)
+        else:
+            # Fallback to legacy file-based approach
+            from services.schema_factory import get_schema_factory
+            schema_factory = get_schema_factory()
+
         ontology_config = schema_factory.load_config()
         models = schema_factory.get_dynamic_models()
         system_instruction = schema_factory.get_system_instruction()
@@ -255,7 +323,8 @@ async def graph_node(state: IngestionState) -> dict:
         print(f"      - Node types: {', '.join(schema_factory.get_node_types())}")
         print(f"      - Relationship types: {', '.join(schema_factory.get_relationship_types())}")
 
-        llm = get_llm()
+        # Create LLM with request-specific config
+        llm = create_llm(state["embedding_config"])
         structured_llm = llm.with_structured_output(ExtractionResult)
 
         max_chunks_for_graph = 5
@@ -269,7 +338,7 @@ async def graph_node(state: IngestionState) -> dict:
                 "status": "graph_skipped",
             }
 
-        print(f"   🔍 Extracting graph from {len(chunks_to_process)} chunks using {settings.llm_model_name}...")
+        print(f"   🔍 Extracting graph from {len(chunks_to_process)} chunks using {state['embedding_config'].llm_model}...")
 
         seen_entities: set = set()
 
@@ -313,7 +382,8 @@ Return the extracted nodes and relationships in the specified JSON format.
                 continue
 
         if entities or relationships:
-            graph_store = get_graph_store_service()
+            # Create graph store with request-specific config
+            graph_store = create_graph_store_service(state["neo4j_config"])
             result = await graph_store.add_graph_documents(
                 entities=entities,
                 relationships=relationships,
@@ -453,6 +523,7 @@ async def run_ingestion_workflow(
     storage_path: str,
     filename: str,
     callback_url: str,
+    connection_config: ConnectionConfig,
 ) -> dict:
     """
     Run the ingestion workflow for a document.
@@ -462,6 +533,7 @@ async def run_ingestion_workflow(
         storage_path: Path to the document in MinIO
         filename: Original filename
         callback_url: Webhook URL for status updates
+        connection_config: Connection configuration for all services
 
     Returns:
         Final workflow state
@@ -471,6 +543,9 @@ async def run_ingestion_workflow(
     print(f"   Document ID: {document_id}")
     print(f"   Storage path: {storage_path}")
     print(f"   Callback URL: {callback_url}")
+    print(f"   MinIO endpoint: {connection_config.minio.endpoint}")
+    print(f"   PostgreSQL: {connection_config.postgres.host}:{connection_config.postgres.port}")
+    print(f"   Neo4j: {connection_config.neo4j.uri}")
     print(f"{'='*60}\n")
 
     initial_state: IngestionState = {
@@ -478,6 +553,13 @@ async def run_ingestion_workflow(
         "storage_path": storage_path,
         "filename": filename,
         "callback_url": callback_url,
+        # Connection configs
+        "minio_config": connection_config.minio,
+        "postgres_config": connection_config.postgres,
+        "neo4j_config": connection_config.neo4j,
+        "embedding_config": connection_config.embedding,
+        "ontology_content": connection_config.ontology_content,
+        # Processing state
         "text_chunks": [],
         "entities": [],
         "relationships": [],
@@ -494,3 +576,30 @@ async def run_ingestion_workflow(
     print(f"{'='*60}\n")
 
     return dict(result)
+
+
+# =============================================================================
+# Legacy function for backwards compatibility
+# =============================================================================
+
+async def run_ingestion_workflow_legacy(
+    document_id: str,
+    storage_path: str,
+    filename: str,
+    callback_url: str,
+) -> dict:
+    """
+    Run the ingestion workflow using legacy .env configuration.
+
+    DEPRECATED: Use run_ingestion_workflow with ConnectionConfig for multi-tenant support.
+    """
+    settings = get_settings()
+    connection_config = settings.to_connection_config()
+
+    return await run_ingestion_workflow(
+        document_id=document_id,
+        storage_path=storage_path,
+        filename=filename,
+        callback_url=callback_url,
+        connection_config=connection_config,
+    )

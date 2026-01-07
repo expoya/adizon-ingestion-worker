@@ -31,6 +31,7 @@ langchain-community>=0.3.13
 langchain-text-splitters>=0.3.4
 langgraph>=0.2.60
 langchain-postgres>=0.0.12
+langchain-unstructured>=0.1.0
 
 # -----------------------------------------------------------------------------
 # Document Processing (PDF, DOCX, OCR)
