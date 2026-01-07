@@ -111,6 +111,10 @@ class Settings(BaseSettings):
         alias="EMBEDDING_MODEL",
     )
 
+    # Local override for embedding URL (used when worker is in same network as Ollama)
+    # If set, this overrides the embedding URL from connection_config
+    local_embedding_api_url: str | None = Field(default=None, alias="LOCAL_EMBEDDING_API_URL")
+
     # -------------------------------------------------------------------------
     # LLM Model (for graph extraction)
     # -------------------------------------------------------------------------

@@ -546,6 +546,18 @@ async def run_ingestion_workflow(
     Returns:
         Final workflow state
     """
+    # Check for local embedding URL override (when worker is in same network as Ollama)
+    settings = get_settings()
+    embedding_config = connection_config.embedding
+    if settings.local_embedding_api_url:
+        print(f"   ⚡ Using local embedding URL override: {settings.local_embedding_api_url}")
+        embedding_config = EmbeddingConfig(
+            api_url=settings.local_embedding_api_url,
+            api_key=embedding_config.api_key,
+            model=embedding_config.model,
+            llm_model=embedding_config.llm_model,
+        )
+
     print(f"\n{'='*60}")
     print(f"🚀 Starting ingestion workflow for: {filename}")
     print(f"   Document ID: {document_id}")
@@ -554,6 +566,7 @@ async def run_ingestion_workflow(
     print(f"   MinIO endpoint: {connection_config.minio.endpoint}")
     print(f"   PostgreSQL: {connection_config.postgres.host}:{connection_config.postgres.port}")
     print(f"   Neo4j: {connection_config.neo4j.uri}")
+    print(f"   Embedding URL: {embedding_config.api_url}")
     print(f"{'='*60}\n")
 
     initial_state: IngestionState = {
@@ -565,7 +578,7 @@ async def run_ingestion_workflow(
         "minio_config": connection_config.minio,
         "postgres_config": connection_config.postgres,
         "neo4j_config": connection_config.neo4j,
-        "embedding_config": connection_config.embedding,
+        "embedding_config": embedding_config,
         "ontology_content": connection_config.ontology_content,
         # Processing state
         "text_chunks": [],
