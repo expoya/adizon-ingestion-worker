@@ -209,6 +209,14 @@ async def load_node(state: IngestionState) -> dict:
 
         documents = sanitize_documents(documents)
 
+        # Debug: Log extracted content summary
+        print(f"   📊 Extracted {len(documents)} document elements:")
+        for i, doc in enumerate(documents[:3]):  # Show first 3
+            content_preview = doc.page_content[:200].replace('\n', ' ') if doc.page_content else "<empty>"
+            print(f"      [{i+1}] ({len(doc.page_content)} chars): {content_preview}...")
+        if len(documents) > 3:
+            print(f"      ... and {len(documents) - 3} more elements")
+
         return {
             "text_chunks": documents,
             "status": "loaded",
