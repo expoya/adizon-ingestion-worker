@@ -179,8 +179,11 @@ async def load_node(state: IngestionState) -> dict:
                 print(f"   📄 Processing {file_ext.upper()} with Unstructured: {state['filename']}")
 
                 # Configure loader based on file type
+                # Use "single" mode to get full text, then let RecursiveCharacterTextSplitter
+                # handle chunking with proper overlap. This avoids tiny fragments that cause
+                # NaN errors in embeddings and provides better context for RAG.
                 loader_kwargs: dict[str, Any] = {
-                    "mode": "elements",
+                    "mode": "single",
                     "languages": ["deu", "eng"],  # Support German and English
                 }
 
