@@ -66,17 +66,29 @@ class IngestionState(TypedDict):
 
 def sanitize_text(text: str) -> str:
     """
-    Sanitize text for PostgreSQL compatibility.
+    Sanitize text for PostgreSQL and embedding model compatibility.
 
     Removes:
     - NUL bytes (0x00) which PostgreSQL text fields cannot contain
     - Other problematic control characters
+    - Replacement characters and other problematic Unicode
     """
     if not text:
         return ""
 
+    # Remove NUL bytes
     text = text.replace("\x00", "")
+
+    # Remove control characters (except newline, tab, carriage return)
     text = re.sub(r'[\x01-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
+
+    # Remove Unicode replacement character and other problematic chars
+    text = text.replace("\ufffd", "")  # Replacement character
+    text = text.replace("\ufffe", "")  # BOM
+    text = text.replace("\uffff", "")  # Not a character
+
+    # Normalize whitespace (multiple spaces/newlines to single)
+    text = re.sub(r'\s+', ' ', text).strip()
 
     return text
 
@@ -277,13 +289,32 @@ async def vector_node(state: IngestionState) -> dict:
         return {}
 
     try:
+        # Filter out empty or too short chunks that cause NaN errors in embeddings
+        valid_chunks = [
+            chunk for chunk in state["text_chunks"]
+            if chunk.page_content and len(chunk.page_content.strip()) >= 10
+        ]
+
+        skipped = len(state["text_chunks"]) - len(valid_chunks)
+        if skipped > 0:
+            print(f"   ⚠️ Filtered out {skipped} empty/short chunks (< 10 chars)")
+
+        if not valid_chunks:
+            print("   ⚠️ No valid chunks to embed after filtering")
+            return {
+                "vector_ids": [],
+                "status": "vectorized",
+            }
+
+        print(f"   📦 Embedding {len(valid_chunks)} chunks...")
+
         # Create vector store with request-specific configs
         vector_store = create_vector_store_service(
             state["postgres_config"],
             state["embedding_config"],
         )
         ids = await vector_store.add_documents(
-            chunks=state["text_chunks"],
+            chunks=valid_chunks,
             document_id=state["document_id"],
         )
 
