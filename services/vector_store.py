@@ -83,17 +83,52 @@ class VectorStoreService:
         self,
         chunks: List[Document],
         document_id: str,
+        batch_size: int = 50,
     ) -> List[str]:
-        """Add document chunks to the vector store."""
+        """
+        Add document chunks to the vector store with robust error handling.
+
+        Processes chunks in batches. If a batch fails (e.g., NaN error from Jina),
+        falls back to processing chunks individually, skipping problematic ones.
+        """
         for chunk in chunks:
             chunk.metadata["document_id"] = document_id
 
-        ids = await self._run_sync(
-            self.vector_store.add_documents,
-            chunks,
-        )
+        all_ids = []
+        failed_chunks = 0
 
-        return ids
+        # Process in batches
+        for i in range(0, len(chunks), batch_size):
+            batch = chunks[i:i + batch_size]
+
+            try:
+                ids = await self._run_sync(
+                    self.vector_store.add_documents,
+                    batch,
+                )
+                all_ids.extend(ids)
+            except Exception as batch_error:
+                # Batch failed - try individual chunks
+                logger.warning(f"Batch {i//batch_size + 1} failed: {batch_error}. Processing individually...")
+
+                for j, chunk in enumerate(batch):
+                    try:
+                        ids = await self._run_sync(
+                            self.vector_store.add_documents,
+                            [chunk],
+                        )
+                        all_ids.extend(ids)
+                    except Exception as chunk_error:
+                        failed_chunks += 1
+                        # Log but don't fail - skip problematic chunk
+                        content_preview = chunk.page_content[:50].replace('\n', ' ') if chunk.page_content else "<empty>"
+                        logger.warning(f"Skipping chunk {i+j+1}: {content_preview}... Error: {chunk_error}")
+
+        if failed_chunks > 0:
+            logger.warning(f"Completed with {failed_chunks} failed chunks (skipped)")
+            print(f"   ⚠️ {failed_chunks} chunks failed to embed (skipped)")
+
+        return all_ids
 
 
 def create_vector_store_service(
