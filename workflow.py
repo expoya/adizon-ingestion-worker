@@ -179,15 +179,18 @@ async def load_node(state: IngestionState) -> dict:
                 print(f"   📄 Processing {file_ext.upper()} with Unstructured: {state['filename']}")
 
                 # Configure loader based on file type
-                # Use chunking_strategy="basic" with large max_characters to get full text
-                # as a single document, then let RecursiveCharacterTextSplitter handle
-                # proper chunking with overlap. This avoids tiny fragments that cause
-                # NaN errors in embeddings.
+                # Use chunking_strategy="by_title" for semantic chunking - this keeps
+                # logically related content together (e.g., sections under headings).
+                # This is better for GraphRAG because entities stay in their semantic context.
+                # The RecursiveCharacterTextSplitter in split_node will further split
+                # any chunks that exceed max_characters.
                 # Note: langchain_unstructured.UnstructuredLoader does NOT support "mode"
                 # parameter - it uses chunking_strategy instead.
                 loader_kwargs: dict[str, Any] = {
-                    "chunking_strategy": "basic",
-                    "max_characters": 1000000,  # Very large to get full text
+                    "chunking_strategy": "by_title",
+                    "max_characters": 3000,  # Target chunk size, matches our splitter
+                    "new_after_n_chars": 2500,  # Soft limit before starting new chunk
+                    "combine_text_under_n_chars": 500,  # Combine small elements
                     "include_orig_elements": False,
                     "languages": ["deu", "eng"],  # Support German and English
                 }
