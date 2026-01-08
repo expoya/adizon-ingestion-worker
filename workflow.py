@@ -179,11 +179,16 @@ async def load_node(state: IngestionState) -> dict:
                 print(f"   📄 Processing {file_ext.upper()} with Unstructured: {state['filename']}")
 
                 # Configure loader based on file type
-                # Use "single" mode to get full text, then let RecursiveCharacterTextSplitter
-                # handle chunking with proper overlap. This avoids tiny fragments that cause
-                # NaN errors in embeddings and provides better context for RAG.
+                # Use chunking_strategy="basic" with large max_characters to get full text
+                # as a single document, then let RecursiveCharacterTextSplitter handle
+                # proper chunking with overlap. This avoids tiny fragments that cause
+                # NaN errors in embeddings.
+                # Note: langchain_unstructured.UnstructuredLoader does NOT support "mode"
+                # parameter - it uses chunking_strategy instead.
                 loader_kwargs: dict[str, Any] = {
-                    "mode": "single",
+                    "chunking_strategy": "basic",
+                    "max_characters": 1000000,  # Very large to get full text
+                    "include_orig_elements": False,
                     "languages": ["deu", "eng"],  # Support German and English
                 }
 
